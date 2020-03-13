@@ -1,70 +1,64 @@
 // @flow
-import { default as React, Fragment } from 'react';
+import { default as React, createContext, Ref } from 'react';
 // $FlowFixMe
 import { TimelineMax as TimelineClass } from 'gsap/TweenMax';
 import { getTweenFunction, playStates, setPlayState, refOrInnerRef } from './helper';
 
 type TimelineProps = {
   children: Node,
-  wrapper?: any,
   target?: any,
 
   duration?: number,
   progress?: number,
   totalProgress?: number,
   playState?: string,
-
   [prop: string]: any,
-
 }
+
+type TimelineTweenContext = {
+  timeline: TimelineClass, 
+  timelineTargets: any[],
+}
+
+export const TimelineContext = React.createContext<TimelineTweenContext>([]);
 
 class Timeline extends React.Component<TimelineProps, {}> {
   static displayName = 'Timeline';
+  
+  static contextType = TimelineContext;
 
   static get playState() {
     return playStates;
   }
 
+  timeline: TimelineClass;
   targets: any[];
-  tweens: any[];
-  timeline: any;
 
   constructor(props: TimelineProps) {
     super(props);
-
+    
     this.targets = [];
-    this.tweens = [];
-  }
-
-  componentDidMount() {
-    this.createTimeline();
+    this.timeline = this.createTimeline();
   }
 
   componentWillUnmount() {
-    this.timeline.kill();
+    if(this.timeline) {
+      this.timeline.kill();
+    }
   }
 
   getSnapshotBeforeUpdate() {
     this.targets = [];
-    this.tweens = [];
     return null;
   }
 
   componentDidUpdate(prevProps: TimelineProps) {
     const {
-      children,
       duration,
       progress,
       totalProgress,
       playState,
     } = this.props;
-
-    // if children change create a new timeline
-    // TODO: replace easy length check with fast equal check
-    // TODO: same for props.target?
-    if (React.Children.count(prevProps.children) !== React.Children.count(children)) {
-      this.createTimeline();
-    }
 
     // execute function calls
     if (progress !== prevProps.progress) {
@@ -76,7 +70,7 @@ class Timeline extends React.Component<TimelineProps, {}> {
     if (duration !== prevProps.duration) {
       this.timeline.duration(duration);
     }
-
+    
     setPlayState(playState, prevProps.playState, this.timeline);
   }
 
@@ -91,51 +85,29 @@ class Timeline extends React.Component<TimelineProps, {}> {
       ...vars
     } = this.props;
 
-    if (this.timeline) {
-      this.timeline.kill();
-    }
-
+    
     // init timeline
-    this.timeline = new TimelineClass({
+    const timeline = new TimelineClass({
       smoothChildTiming: true,
       ...vars,
     });
 
-    // add tweens to timeline
-    let childIndex = 0;
-    React.Children.forEach(children, child => {
-      if (child.type && child.type.displayName === 'Tween' && !child.props.children) {
-        const {
-          position,
-          align,
-          stagger,
-          ...vars
-        } = child.props;
+    if (this.context && this.context.length !== 0 && this.context[0]) {
+      const [parentTimeline, timelineTarget] = this.context;
+      // we are in another timeline
+      const {
+        position,
+        align,
+        stagger,
+      } = this.props;
 
-        const tween = getTweenFunction(this.targets, { stagger, ...vars });
-        this.timeline.add(tween, position || '+=0', align || 'normal', stagger || 0);
-      }
-      else if (child.type && (child.type.displayName === 'Tween' || child.type.displayName === 'Timeline')) {
-        const {
-          position,
-          align,
-          stagger,
-        } = child.props;
-
-        const tweenRef = this.tweens[childIndex];
-        this.timeline.add(tweenRef.getGSAP(), position || '+=0', align || 'normal', stagger || 0);
-
-        childIndex++;
-      }
-    });
+      parentTimeline.add(timeline, position || '+=0', align || 'normal', stagger || '0');
+    }
 
     if (duration) {
-      this.timeline.duration(duration);
+      timeline.duration(duration);
     }
-  }
-
-  getGSAP() {
-    return this.timeline;
+    return timeline;
   }
 
   addTarget(target: any) {
@@ -145,58 +117,43 @@ class Timeline extends React.Component<TimelineProps, {}> {
     }
   }
 
-  addTween(tween: any) {
-    // tween is null at unmount
-    if (tween !== null) {
-      this.tweens.push(tween);
-    }
-  }
-
-  cloneElement(child: any, method:string = 'addTarget') {
+  cloneElement(child: any) {
     return React.cloneElement(
       child,
       {
         // $FlowFixMe
-        [refOrInnerRef(child)]: (target) => this[method](target)
+        [refOrInnerRef(child)]: (target) => this.addTarget(target)
       }
     );
   }
 
   render() {
-    let { target, children, wrapper } = this.props;
+    let { target, children } = this.props;
 
-    const output = (
-      <Fragment>
-        {/* First render the target */}
-        {React.Children.map(target, child => {
-          if (child.type.toString() === 'Symbol(react.fragment)') {
-            return React.Children.map(child.props.children, fragmentChild => {
-              return this.cloneElement(fragmentChild);
-            });
-          }
-          return this.cloneElement(child);
-        })}
-        {React.Children.map(children, child => {
-          if (child.type && child.type.displayName === 'Tween' && !child.props.children) {
-            return null;
-          }
-          if (child.type && (child.type.displayName === 'Tween' || child.type.displayName === 'Timeline')) {
-            return this.cloneElement(child, 'addTween');
-          }
-          return child;
-        })}
-      </Fragment>
-    );
+    let renderTargets = React.Children.map(target, child => {
+      if (child.type.toString() === 'Symbol(react.fragment)') {
+        return React.Children.map(child.props.children, fragmentChild => {
+          return this.cloneElement(fragmentChild);
+        });
+      }
+      return this.cloneElement(child);
+    });
 
-    if (wrapper) {
-      return React.cloneElement(
-        wrapper,
-        [],
-        output
-      );
+    let targets = this.targets;
+    if (this.targets.length === 0) {
+      if(this.context && this.context.length !== 0) {
+        const [timeline, timelineTargets] = this.context;
+        targets = timelineTargets;
+      } 
     }
 
-    return output;
+    return (
+      <TimelineContext.Provider value={[this.timeline, targets]}>
+        {/* First render the target */}
+        {renderTargets}
+        {children}
+      </TimelineContext.Provider>
+    );
   }
 }
 

@@ -4,6 +4,7 @@ import { default as React, Fragment } from 'react';
 import { TweenMax as TweenClass } from 'gsap/TweenMax';
 // $FlowFixMe
 import 'gsap/TextPlugin';
+import { TimelineContext } from './Timeline';
 import { getTweenFunction, playStates, setPlayState, isEqual, refOrInnerRef } from './helper';
 import PlugInSvgDraw from './plugins/PlugInSvgDraw';
 PlugInSvgDraw();
@@ -15,7 +16,6 @@ TweenClass.lagSmoothing(0);
 
 type TweenProps = {
   children?: Node,
-  wrapper?: any,
 
   duration?: number,
   from?: any,
@@ -35,12 +35,14 @@ type TweenProps = {
 class Tween extends React.Component<TweenProps, {}> {
   static displayName = 'Tween';
 
+  static contextType = TimelineContext;
+
   static get playState() {
     return playStates;
   }
 
   targets: any[];
-  tween: any;
+  tween: TweenClass;
 
   constructor(props: TweenProps) {
     super(props);
@@ -49,11 +51,13 @@ class Tween extends React.Component<TweenProps, {}> {
   }
 
   componentDidMount() {
-    this.createTween();
+    this.tween = this.createTween();
   }
 
   componentWillUnmount() {
-    this.tween.kill();
+    if(this.tween) {
+      this.tween.kill();
+    }
   }
 
   getSnapshotBeforeUpdate() {
@@ -64,7 +68,6 @@ class Tween extends React.Component<TweenProps, {}> {
   componentDidUpdate(prevProps: TweenProps) {
     const {
       children,
-      wrapper,
 
       duration,
       from,
@@ -90,7 +93,11 @@ class Tween extends React.Component<TweenProps, {}> {
     // if children change create a new tween
     // TODO: replace easy length check with fast equal check
     if (React.Children.count(prevProps.children) !== React.Children.count(children)) {
-      this.createTween();
+      if (this.tween) {
+        this.tween.kill();
+      }
+    
+      this.tween = this.createTween();
     }
 
     if (disabled) {
@@ -131,15 +138,37 @@ class Tween extends React.Component<TweenProps, {}> {
   }
 
   createTween() {
-    if (this.tween) {
-      this.tween.kill();
+    const {
+      position,
+      align,
+      stagger,
+      ...vars
+    } = this.props;
+
+    let tween;
+
+    if (this.context && this.context.length !== 0){
+      const [timeline, timelineTargets] = this.context;
+      if(this.targets.length === 0) {
+        
+        tween = getTweenFunction(timelineTargets, { stagger, ...vars });
+      }  else {
+        tween = getTweenFunction(this.targets, { stagger, ...vars }); 
+      }
+      console.log("Adding tween to context timeline: " + tween);
+      timeline.add(tween, position || '+=0', align || 'normal', stagger || 0);
+    } else {
+      if(this.target.length === 0) {
+        tween = getTweenFunction([], { stagger, ...vars });
+        console.warn("Creating a tween without target. Did you forget to put the tween in a timeline oder adding a reffable child inside the tween?");
+      } else {
+        tween = getTweenFunction(this.targets, this.props);
+      }
     }
-    this.tween = getTweenFunction(this.targets, this.props);
+    
+    return tween;
   }
 
-  getGSAP() {
-    return this.tween;
-  }
 
   addTarget(target: any) {
     // target is null at unmount
@@ -149,11 +178,9 @@ class Tween extends React.Component<TweenProps, {}> {
   }
 
   render() {
-    let { children, wrapper } = this.props;
-
-    const output = (
+    return (
       <Fragment>
-        {React.Children.map(children, child =>
+        {React.Children.map(this.props.children, child =>
           React.cloneElement(
             child,
             {
@@ -163,16 +190,6 @@ class Tween extends React.Component<TweenProps, {}> {
         )}
       </Fragment>
     );
-
-    if (wrapper) {
-      return React.cloneElement(
-        wrapper,
-        [],
-        output
-      );
-    }
-
-    return output;
   }
 }
 
